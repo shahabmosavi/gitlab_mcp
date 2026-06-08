@@ -82,20 +82,21 @@ jobs:
           GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GITLAB_TOKEN: ${{ secrets.GITLAB_TOKEN }}
           GITLAB_URL: ${{ vars.GITLAB_URL }}
+          APP_PORT: ${{ vars.APP_PORT || 8077 }}
           IMAGE: ghcr.io/${{ github.repository }}:main
         with:
           host: ${{ secrets.SSH_HOST }}
           username: ${{ secrets.SSH_USER }}
           key: ${{ secrets.SSH_PRIVATE_KEY }}
           port: ${{ vars.SSH_PORT || 22 }}
-          envs: GHCR_USER,GHCR_TOKEN,GITLAB_TOKEN,GITLAB_URL,IMAGE
+          envs: GHCR_USER,GHCR_TOKEN,GITLAB_TOKEN,GITLAB_URL,APP_PORT,IMAGE
           script: |
             set -e
             echo "$GHCR_TOKEN" | docker login ghcr.io -u "$GHCR_USER" --password-stdin
             docker pull "$IMAGE"
             docker rm -f gitlab-mcp 2>/dev/null || true
             docker run -d --name gitlab-mcp --restart unless-stopped \
-              -p 8000:8000 \
+              -p "${APP_PORT}:8000" \
               -e MCP_TRANSPORT=streamable-http \
               -e GITLAB_TOKEN="$GITLAB_TOKEN" \
               -e GITLAB_URL="$GITLAB_URL" \
