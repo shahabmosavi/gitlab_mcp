@@ -1,9 +1,24 @@
 # GitLab MCP
 
 A [Model Context Protocol](https://modelcontextprotocol.io) server that exposes the
-GitLab REST API to MCP clients (Claude Code, Claude Desktop, etc.). Authenticate once
-with a personal access token and the assistant can drive projects, issues, merge
-requests, repositories, and CI/CD pipelines.
+GitLab REST API to MCP clients (Claude Code, Claude Desktop, etc.) to drive projects,
+issues, merge requests, repositories, and CI/CD pipelines.
+
+The server is **multi-tenant**: it stores no credentials. Every caller supplies their
+own GitLab token **and** instance URL, so one deployed server can serve many users,
+each acting as themselves.
+
+## Authentication
+
+Each request resolves credentials in this order:
+
+1. **HTTP headers** (for networked transports — the normal case for a deployed server):
+   - `X-GitLab-Token: glpat-xxxx`  (or `Authorization: Bearer glpat-xxxx`)
+   - `X-GitLab-Url: https://gitlab.example.com`  (defaults to `https://gitlab.com`)
+2. **Environment variables** (fallback, handy for local stdio use):
+   - `GITLAB_TOKEN`, `GITLAB_URL`
+
+Create the token in GitLab under **Settings → Access Tokens** with the **`api`** scope.
 
 ## Setup
 
@@ -11,15 +26,6 @@ requests, repositories, and CI/CD pipelines.
 python3 -m venv .venv
 source .venv/bin/activate
 pip install -e .
-```
-
-Create a personal access token in GitLab (**Settings → Access Tokens**) with the
-**`api`** scope, then set it in the environment:
-
-```sh
-export GITLAB_TOKEN=glpat-xxxxxxxxxxxxxxxxxxxx
-# For self-hosted instances only:
-# export GITLAB_URL=https://gitlab.example.com
 ```
 
 ## Run
@@ -41,20 +47,12 @@ version tags:
 docker pull ghcr.io/shahabmosavi/gitlab_mcp:main
 ```
 
-Run it as a **networked** MCP server (HTTP transport) on your server:
+Run it as a **networked** MCP server (HTTP transport). No token is baked in —
+callers authenticate per request with headers:
 
 ```sh
 docker run -d --name gitlab-mcp -p 8000:8000 \
   -e MCP_TRANSPORT=streamable-http \
-  -e GITLAB_TOKEN=glpat-xxxxxxxx \
-  -e GITLAB_URL=https://git.dctm.dev \
-  ghcr.io/shahabmosavi/gitlab_mcp:main
-```
-
-Or run it as a local **stdio** server (the default) straight from the image:
-
-```sh
-docker run -i --rm -e GITLAB_TOKEN=glpat-xxxx -e GITLAB_URL=https://git.dctm.dev \
   ghcr.io/shahabmosavi/gitlab_mcp:main
 ```
 
@@ -66,21 +64,18 @@ docker run -i --rm -e GITLAB_TOKEN=glpat-xxxx -e GITLAB_URL=https://git.dctm.dev
 
 ## Use with Claude Code
 
+**Connect to a deployed server** (each user adds it with their own token/instance):
+
 ```sh
-claude mcp add gitlab --env GITLAB_TOKEN=glpat-xxxx -- gitlab-mcp
+claude mcp add --transport http gitlab https://your-server:8000/mcp \
+  --header "X-GitLab-Token: glpat-xxxxxxxx" \
+  --header "X-GitLab-Url: https://gitlab.example.com"
 ```
 
-Or add it manually to your MCP client config:
+**Or run it locally over stdio** (token via env, no headers needed):
 
-```json
-{
-  "mcpServers": {
-    "gitlab": {
-      "command": "gitlab-mcp",
-      "env": { "GITLAB_TOKEN": "glpat-xxxxxxxxxxxxxxxxxxxx" }
-    }
-  }
-}
+```sh
+claude mcp add gitlab --env GITLAB_TOKEN=glpat-xxxx --env GITLAB_URL=https://gitlab.example.com -- gitlab-mcp
 ```
 
 (Use the absolute path to the `gitlab-mcp` binary inside `.venv/bin/` if it isn't on

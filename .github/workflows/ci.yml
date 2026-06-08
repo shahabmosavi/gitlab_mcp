@@ -80,8 +80,6 @@ jobs:
         env:
           GHCR_USER: ${{ github.actor }}
           GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          GITLAB_TOKEN: ${{ secrets.GITLAB_TOKEN }}
-          GITLAB_URL: ${{ vars.GITLAB_URL }}
           APP_PORT: ${{ vars.APP_PORT || 8077 }}
           IMAGE: ghcr.io/${{ github.repository }}:main
         with:
@@ -89,7 +87,9 @@ jobs:
           username: ${{ secrets.SSH_USER }}
           key: ${{ secrets.SSH_PRIVATE_KEY }}
           port: ${{ vars.SSH_PORT || 22 }}
-          envs: GHCR_USER,GHCR_TOKEN,GITLAB_TOKEN,GITLAB_URL,APP_PORT,IMAGE
+          envs: GHCR_USER,GHCR_TOKEN,APP_PORT,IMAGE
+          # The server is multi-tenant: no token is baked in. Each caller sends
+          # their own X-GitLab-Token / X-GitLab-Url headers per request.
           script: |
             set -e
             echo "$GHCR_TOKEN" | docker login ghcr.io -u "$GHCR_USER" --password-stdin
@@ -98,7 +98,5 @@ jobs:
             docker run -d --name gitlab-mcp --restart unless-stopped \
               -p "${APP_PORT}:8000" \
               -e MCP_TRANSPORT=streamable-http \
-              -e GITLAB_TOKEN="$GITLAB_TOKEN" \
-              -e GITLAB_URL="$GITLAB_URL" \
               "$IMAGE"
             docker image prune -f

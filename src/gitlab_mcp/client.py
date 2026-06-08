@@ -1,4 +1,14 @@
-"""Async GitLab REST API client shared by all MCP tools."""
+"""Async GitLab REST API client shared by all MCP tools.
+
+The server is multi-tenant: it carries no credentials of its own. Each caller
+supplies their own GitLab token and instance URL per request, via HTTP headers:
+
+    X-GitLab-Token: glpat-xxxx          (or  Authorization: Bearer glpat-xxxx)
+    X-GitLab-Url:   https://gitlab.example.com
+
+For local stdio use (where there are no HTTP headers), the GITLAB_TOKEN and
+GITLAB_URL environment variables are used as a fallback.
+"""
 
 from __future__ import annotations
 
@@ -7,6 +17,8 @@ from typing import Any
 from urllib.parse import quote
 
 import httpx
+
+DEFAULT_URL = "https://gitlab.com"
 
 
 class GitLabError(RuntimeError):
@@ -24,24 +36,13 @@ def encode_id(value: str | int) -> str:
 
 
 class GitLabClient:
-    """Thin async wrapper over the GitLab REST API v4."""
+    """Thin async wrapper over the GitLab REST API v4 for one (url, token) pair."""
 
-    def __init__(self, url: str | None = None, token: str | None = None) -> None:
-        base = (url or os.environ.get("GITLAB_URL") or "https://gitlab.com").rstrip("/")
-        self.token = (
-            token
-            or os.environ.get("GITLAB_TOKEN")
-            or os.environ.get("GITLAB_PRIVATE_TOKEN")
-        )
-        if not self.token:
-            raise RuntimeError(
-                "A GitLab personal access token is required. "
-                "Set GITLAB_TOKEN (and optionally GITLAB_URL for self-hosted instances)."
-            )
-        self.api_url = f"{base}/api/v4"
+    def __init__(self, base_url: str, token: str) -> None:
+        self.api_url = f"{base_url}/api/v4"
         self._client = httpx.AsyncClient(
             base_url=self.api_url,
-            headers={"PRIVATE-TOKEN": self.token},
+            headers={"PRIVATE-TOKEN": token},
             timeout=httpx.Timeout(30.0),
             follow_redirects=True,
         )
@@ -125,12 +126,64 @@ class GitLabClient:
         await self._client.aclose()
 
 
-_client: GitLabClient | None = None
+def _normalize_url(raw: str) -> str:
+    """Accept 'git.example.com', 'https://git.example.com', or a full '/api/v4' URL."""
+    raw = raw.strip().rstrip("/")
+    if raw.endswith("/api/v4"):
+        raw = raw[: -len("/api/v4")]
+    if not raw.startswith(("http://", "https://")):
+        raw = "https://" + raw
+    return raw.rstrip("/")
+
+
+def _request_headers() -> Any:
+    """Return the current request's headers (HTTP transports), or None for stdio."""
+    try:
+        from mcp.server.lowlevel.server import request_ctx
+
+        request = request_ctx.get().request
+    except (LookupError, AttributeError):
+        return None
+    return getattr(request, "headers", None)
+
+
+def _resolve_credentials() -> tuple[str, str]:
+    """Resolve (base_url, token) from request headers, falling back to env vars."""
+    token: str | None = None
+    url: str | None = None
+
+    headers = _request_headers()
+    if headers is not None:
+        token = headers.get("x-gitlab-token")
+        if not token:
+            auth = headers.get("authorization") or ""
+            if auth.lower().startswith("bearer "):
+                token = auth[7:].strip()
+        url = headers.get("x-gitlab-url") or headers.get("x-gitlab-domain")
+
+    token = token or os.environ.get("GITLAB_TOKEN") or os.environ.get("GITLAB_PRIVATE_TOKEN")
+    url = url or os.environ.get("GITLAB_URL") or DEFAULT_URL
+
+    if not token:
+        raise GitLabError(
+            401,
+            "No GitLab token provided. Send your personal access token in the "
+            "'X-GitLab-Token' header (or 'Authorization: Bearer <token>'), and your "
+            "instance in the 'X-GitLab-Url' header (e.g. https://gitlab.example.com).",
+        )
+    return _normalize_url(url), token
+
+
+# One httpx client per (url, token) so connection pools are reused across calls.
+_clients: dict[tuple[str, str], GitLabClient] = {}
 
 
 def get_client() -> GitLabClient:
-    """Lazily construct the shared client (so the token is read at first use)."""
-    global _client
-    if _client is None:
-        _client = GitLabClient()
-    return _client
+    """Return the client for the caller's credentials (resolved per request)."""
+    base_url, token = _resolve_credentials()
+    key = (base_url, token)
+    client = _clients.get(key)
+    if client is None:
+        client = GitLabClient(base_url, token)
+        _clients[key] = client
+    return client

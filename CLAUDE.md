@@ -20,7 +20,11 @@ GITLAB_TOKEN=dummy python -c "import asyncio; from gitlab_mcp.server import mcp;
 print(asyncio.run(mcp.list_tools()))"
 ```
 
-There is no test suite or linter configured yet. `GITLAB_TOKEN` (and optional `GITLAB_URL` for self-hosted) are read lazily on the first tool call — the package imports fine without them.
+There is no test suite or linter configured yet. The package imports and lists tools without any credentials — they're only needed when a tool actually calls the API.
+
+### Authentication (multi-tenant)
+
+The server holds **no credentials**. `client.py::_resolve_credentials()` resolves a `(url, token)` pair **per request**: first from HTTP headers (`X-GitLab-Token` / `Authorization: Bearer`, and `X-GitLab-Url`), then falling back to the `GITLAB_TOKEN` / `GITLAB_URL` env vars (for local stdio use). Headers are read off the `request_ctx` contextvar from `mcp.server.lowlevel.server` (set by the streamable-http transport). `get_client()` caches one `httpx.AsyncClient` per `(url, token)`. This is why a deployed server can serve many users — each acts as themselves. Don't reintroduce a single global token.
 
 ## Architecture
 
